@@ -9,11 +9,11 @@
 #define FEET_BETWEEN_TRIGGERS (INCHES_BETWEEN_TRIGGERS / 12.0)
 #define MAX_CHARS_WIDTH 21
 #define LINE0 0
-#define LINE1 13
-#define LINE2 23
-#define LINE3 33
-#define LINE4 43
-#define LINE5 53
+#define LINE1 17
+#define LINE2 30
+#define LINE3 43
+#define LINE4 56
+// #define LINE5 53
 
 #define FPS_TO_MPH(x) (x * 0.681818)
 #define FEET_TO_MILES(x) (x * 0.000189394)
@@ -31,7 +31,7 @@ void heartbeat(uint32_t deltaTime);
  * Constants
  ***/
 const byte ledPin = 13;
-const byte sensorInterruptPin = 2;
+const byte sensorInterruptPin = PD2;
 const char* rpmIndicator = "|/-\\";
 
 /***
@@ -72,8 +72,8 @@ void setup()
 	// getTaskManager().StartTask(&mTriggerTask);
 
 	pinMode(ledPin, OUTPUT);
-	pinMode(sensorInterruptPin, INPUT_PULLUP);
-	attachInterrupt(digitalPinToInterrupt(sensorInterruptPin), sensorTrigger, RISING);
+	pinMode(sensorInterruptPin, INPUT);
+	attachInterrupt(digitalPinToInterrupt(sensorInterruptPin), sensorTrigger, FALLING);
 
 	Wire.begin();
 	Wire.setClock(400000L);
@@ -125,38 +125,36 @@ void refreshDisplay()
 	mDisplay.setCursor(0, LINE0);
 	mDisplay.print(digitalRead(ledPin) ? F("+") : F(" "));
 	mDisplay.println(F(" Buddy & Jellybean"));
-	mDisplay.drawLine(0, LINE1 - 3, mDisplay.width(), LINE1 - 3, WHITE);
+	mDisplay.drawLine(0, LINE0 + 10, mDisplay.width(), LINE0 + 10, WHITE);
 
 	/*                ...................... */
-	mDisplay.setCursor(0, LINE1);
-	mDisplay.print(F("Feet / Second:"));
-	dtostrf(mFeetPerSecond, 7, 2, mDisplayLineBuffer);
-	mDisplay.print(mDisplayLineBuffer);
-
-	mDisplay.setCursor(0, LINE2);
-	mDisplay.print(F("Feet Total:  "));
-	dtostrf(mFeetTraveled, 8, 2, mDisplayLineBuffer);
-	mDisplay.print(mDisplayLineBuffer);
-
-	mDisplay.setCursor(0, LINE3);
+	mDisplay.setCursor(2, LINE1);
 	mDisplay.print(F("Miles / Hour: "));
 	dtostrf(FPS_TO_MPH(mFeetPerSecond), 7, 4, mDisplayLineBuffer);
 	mDisplay.print(mDisplayLineBuffer);
 
-	mDisplay.setCursor(0, LINE4);
+	mDisplay.setCursor(2, LINE2);
 	mDisplay.print(F("Miles Total:  "));
 	dtostrf(FEET_TO_MILES(mFeetTraveled), 7, 4, mDisplayLineBuffer);
 	mDisplay.print(mDisplayLineBuffer);
 
-	mDisplay.setCursor(0, LINE5);
+	mDisplay.setCursor(2, LINE3);
 	mDisplay.print(F("RPM:     "));
 	mDisplay.print(rpmIndicator[mRpmIndexIndex]);
 	mDisplay.print(F("    "));
 	dtostrf(FPS_T0_RPM(mFeetPerSecond), 7, 2, mDisplayLineBuffer);
 	mDisplay.print(mDisplayLineBuffer);
-	// mDisplay.print(F("                     "));
-	// mDisplay.setCursor(mTriggerMarkerIndex * 6, LINE5);
-	// mDisplay.print(F("*"));
+
+	long h, m, s;
+	h = millis() / (60l * 60l * 1000l);
+	m = (millis() / (60l * 1000l)) % 60l;
+	s = (millis() / 1000l) % 60l;
+	sprintf_P(mDisplayLineBuffer, PSTR("%4ld:%02ld:%02ld"), h, m, s);
+	mDisplay.setCursor(2, LINE4);
+	mDisplay.print(F("Time:      "));
+	mDisplay.print(mDisplayLineBuffer);
+
+
 
 	mDisplay.flushDisplay();
 
@@ -177,7 +175,7 @@ void sensorTrigger()
 
 	/* Try to handle double-triggers / debounce when we get a bit of noise on the pin */
 	unsigned long now = millis();
-	if (now - mTriggerMillis < 10)
+	if (now - mTriggerMillis < 100)
 	{
 		return;
 	}
