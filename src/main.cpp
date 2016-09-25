@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <EEPROM.h>
 #include "Task.h"
 #include "FunctionTask.h"
 #include "lcd/Adafruit_I2C_SH1106.h"
@@ -18,7 +19,10 @@
 #define FPS_TO_MPH(x) (x * 0.681818)
 #define FEET_TO_MILES(x) (x * 0.000189394)
 #define FPS_T0_RPM(x) ((x / (WHEEL_DIAMETER_INCHES / 12)) * 60)
+#define HEARTBEAT_INTERVAL 500
 
+#define DATA_VERSION  "004"
+#define DATA_START    16
 
 /***
  * Private Prototypes
@@ -37,16 +41,28 @@ const char* rpmIndicator = "|/-\\";
 /***
  * Local Variables
  ***/
-FunctionTask mHeartbeatTask(heartbeat, MsToTaskTime(500));
+FunctionTask mHeartbeatTask(heartbeat, MsToTaskTime(HEARTBEAT_INTERVAL));
 Adafruit_I2C_SH1106 mDisplay;
 
 unsigned long mPreviousTriggerMillis = 0;
 unsigned long mTriggerMillis = 1;
 float mFeetPerSecond = 0;
-float mFeetTraveled = 0;
+//float mFeetTraveled = 0;
 unsigned int mRpmIndexIndex = 0;
 char mDisplayLineBuffer[MAX_CHARS_WIDTH+1];
 bool mIsDirty = true;
+
+struct StorageDataStruct
+{
+	char version[4];
+	float feetTraveled;
+	unsigned long millis;
+} mDataStore =
+{
+	DATA_VERSION,
+	1042002.72,  /* 197.349 miles */
+	3433800000   /* 39:17:50:24 */
+};
 
 /************************************************
  * Obtain singleton task manager
@@ -59,6 +75,54 @@ TaskManager& getTaskManager()
 
 
 
+/*************************************************************************
+ *
+ *************************************************************************/
+void writeToEEPROM()
+{
+	Serial.println(F("Write to EEPROM"));
+	Serial.println(mDataStore.version);
+	Serial.println(mDataStore.feetTraveled);
+	Serial.println(mDataStore.millis);
+
+	for (unsigned int t=0; t<sizeof(mDataStore); t++)
+	{
+		EEPROM.write(DATA_START + t, *((char*)&mDataStore + t));
+	}
+
+}
+
+
+
+/*************************************************************************
+ *
+ ************************************************************************/
+void loadFromEEPROM()
+{
+	Serial.println(F("Load from EEPROM"));
+
+	if (EEPROM.read(DATA_START + 0) == DATA_VERSION[0] &&
+		EEPROM.read(DATA_START + 1) == DATA_VERSION[1] &&
+		EEPROM.read(DATA_START + 2) == DATA_VERSION[2])
+	{
+		for (unsigned int t=0; t<sizeof(mDataStore); t++)
+		{
+			*((char*)&mDataStore + t) = EEPROM.read(DATA_START + t);
+		}
+
+		Serial.println(mDataStore.version);
+		Serial.println(mDataStore.feetTraveled);
+		Serial.println(mDataStore.millis);
+	}
+	else
+	{
+		Serial.println(F("Incompatible data store version, default values used"));
+	}
+
+}
+
+
+
 /******************************************************************************
  *
  *****************************************************************************/
@@ -66,10 +130,10 @@ void setup()
 {
 	Serial.begin(9600);
 	Serial.println(F("Staring..."));
-	// getTaskManager().StartTask(&mHeartbeatTask);
-	getTaskManager().StartTask(&mHeartbeatTask);
 
-	// getTaskManager().StartTask(&mTriggerTask);
+	loadFromEEPROM();
+
+	getTaskManager().StartTask(&mHeartbeatTask);
 
 	pinMode(ledPin, OUTPUT);
 	pinMode(sensorInterruptPin, INPUT);
@@ -135,7 +199,7 @@ void refreshDisplay()
 
 	mDisplay.setCursor(2, LINE2);
 	mDisplay.print(F("Miles Total:  "));
-	dtostrf(FEET_TO_MILES(mFeetTraveled), 7, 4, mDisplayLineBuffer);
+	dtostrf(FEET_TO_MILES(mDataStore.feetTraveled), 7, 4, mDisplayLineBuffer);
 	mDisplay.print(mDisplayLineBuffer);
 
 	mDisplay.setCursor(2, LINE3);
@@ -145,19 +209,26 @@ void refreshDisplay()
 	dtostrf(FPS_T0_RPM(mFeetPerSecond), 7, 2, mDisplayLineBuffer);
 	mDisplay.print(mDisplayLineBuffer);
 
-	long h, m, s;
-	h = millis() / (60l * 60l * 1000l);
-	m = (millis() / (60l * 1000l)) % 60l;
-	s = (millis() / 1000l) % 60l;
-	sprintf_P(mDisplayLineBuffer, PSTR("%4ld:%02ld:%02ld"), h, m, s);
+	long d, h, m, s;
+	d = mDataStore.millis / (24l * 60l * 60l * 1000l);
+	h = (mDataStore.millis / (60l * 60l * 1000l)) % 24l;
+	m = (mDataStore.millis / (60l * 1000l)) % 60l;
+	s = (mDataStore.millis / 1000l) % 60l;
+	sprintf_P(mDisplayLineBuffer, PSTR("%4ld:%02ld:%02ld:%02ld"), d, h, m, s);
 	mDisplay.setCursor(2, LINE4);
-	mDisplay.print(F("Time:      "));
+	mDisplay.print(F("Time:   "));
 	mDisplay.print(mDisplayLineBuffer);
-
-
 
 	mDisplay.flushDisplay();
 
+	/* Store to the EEProm every 30 seconds */
+	if (m == 0 | m == 30)
+	{
+		if (s == 0)
+		{
+			writeToEEPROM();
+		}
+	}
 }
 
 
@@ -189,7 +260,7 @@ void sensorTrigger()
 
 	float secondsBetweenTriggers = (float)(mTriggerMillis - mPreviousTriggerMillis) / 1000;
 	mFeetPerSecond = FEET_BETWEEN_TRIGGERS / secondsBetweenTriggers;
-	mFeetTraveled += FEET_BETWEEN_TRIGGERS;
+	mDataStore.feetTraveled += FEET_BETWEEN_TRIGGERS;
 
 	mIsDirty = true;
 }
@@ -199,10 +270,18 @@ void sensorTrigger()
  *************************************************************************/
 void heartbeat(uint32_t deltaTime)
 {
+
+	/* Increment our main time tracker value */
+	mDataStore.millis += deltaTime;
+
 	if (millis() - mTriggerMillis > 5000)
 	{
 		mFeetPerSecond = 0;
 	}
+
 	digitalWrite(ledPin, digitalRead(ledPin) == HIGH ? LOW : HIGH);
+
+
 	refreshDisplay();
 }
+
